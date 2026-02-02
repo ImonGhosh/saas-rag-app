@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   /* config options here */
   reactStrictMode: true,
+  experimental: {
+    proxyTimeout: 5 * 60 * 1000,
+  },
   async rewrites() {
     return [
       {
@@ -14,8 +17,8 @@ const nextConfig: NextConfig = {
         destination: "http://127.0.0.1:8000/ingest",
       },
       {
-        source: "/ingest-file",
-        destination: "http://127.0.0.1:8000/ingest-file",
+        source: "/ingest-file/:path*",
+        destination: "http://127.0.0.1:8000/ingest-file/:path*",
       }
     ];
   },

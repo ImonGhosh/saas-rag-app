@@ -143,10 +143,50 @@ export default function Home() {
                 body: formData,
             });
 
-            const text = await res.text();
-            if (!res.ok) throw new Error(text || `Request failed (${res.status})`);
+            if (res.status !== 202) {
+                const text = await res.text();
+                if (!res.ok) throw new Error(text || `Request failed (${res.status})`);
+                setIngestionResponse(text);
+                return;
+            }
 
-            setIngestionResponse(text);
+            const data = (await res.json()) as { job_id?: string };
+            const jobId = data.job_id;
+            if (!jobId) throw new Error('Backend did not return a job_id.');
+
+            setIngestionResponse(`Ingestion started (job_id: ${jobId}).`);
+
+            const pollEveryMs = 1000;
+            const timeoutMs = 10 * 60 * 1000;
+            const startedAt = Date.now();
+
+            while (true) {
+                if (Date.now() - startedAt > timeoutMs) {
+                    throw new Error('Ingestion is taking too long. Please check backend logs.');
+                }
+
+                // Wait pollEveryMs milliseconds, then continue.
+                await new Promise((resolve) => setTimeout(resolve, pollEveryMs));
+
+                const statusRes = await fetch(`/ingest-file/status/${jobId}`);
+                if (!statusRes.ok) {
+                    const text = await statusRes.text();
+                    throw new Error(text || `Status request failed (${statusRes.status})`);
+                }
+                const statusData = (await statusRes.json()) as { status?: string; error?: string };
+                const status = statusData.status ?? 'unknown';
+
+                if (status === 'succeeded') {
+                    setIngestionResponse('Successfully ingested the document.');
+                    break;
+                }
+
+                if (status === 'failed') {
+                    throw new Error(statusData.error || 'Ingestion failed.');
+                }
+
+                setIngestionResponse(`Ingestion status: ${status}...`);
+            }
         } catch (err) {
             const message = err instanceof Error ? err.message : String(err);
             setIngestionResponse('Error: ' + message);
