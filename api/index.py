@@ -13,6 +13,7 @@ import os
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import rag_agent_web
+from . import rag_agent_file
 from . import web_data_ingestion
 from .file_data_ingestion import ingest as file_data_ingest
 
@@ -75,33 +76,45 @@ app.add_middleware(
 )
 
 
+# @app.post("/api", response_class=PlainTextResponse)
+# async def idea(payload: IdeaRequest):
+#     try:
+#         db_response = (
+#             supabase
+#             .from_("website_pages")
+#             .select("metadata->>source, metadata->>topic")
+#             .execute()
+#         )
+
+#         if db_response.data:
+#             source_value = db_response.data[0]['source']
+#             print("Source:", source_value)
+#             topic_value = db_response.data[0]['topic']
+#             print("Topic:", topic_value)
+
+#             rag_agent_web.doc_name = source_value
+#             rag_agent_web.topic_name = topic_value
+#             print(f'Document Name: {rag_agent_web.doc_name}')
+#             print(f'Topic Name: {rag_agent_web.topic_name}')
+#         else:
+#             print("No data found.")
+
+#     except Exception as e:
+#         print(f"Error: {db_response.status_code} - {db_response.message}")
+
+#     response = await rag_agent_web.pydantic_ai_expert.run(payload.text, deps=DEPS)
+#     if hasattr(response, "data"):
+#         return str(response.data)
+#     for attr in ("output", "output_text", "text"):
+#         if hasattr(response, attr):
+#             return str(getattr(response, attr))
+#     return str(response)
+
+
 @app.post("/api", response_class=PlainTextResponse)
 async def idea(payload: IdeaRequest):
-    try:
-        db_response = (
-            supabase
-            .from_("website_pages")
-            .select("metadata->>source, metadata->>topic")
-            .execute()
-        )
 
-        if db_response.data:
-            source_value = db_response.data[0]['source']
-            print("Source:", source_value)
-            topic_value = db_response.data[0]['topic']
-            print("Topic:", topic_value)
-
-            rag_agent_web.doc_name = source_value
-            rag_agent_web.topic_name = topic_value
-            print(f'Document Name: {rag_agent_web.doc_name}')
-            print(f'Topic Name: {rag_agent_web.topic_name}')
-        else:
-            print("No data found.")
-
-    except Exception as e:
-        print(f"Error: {db_response.status_code} - {db_response.message}")
-
-    response = await rag_agent_web.pydantic_ai_expert.run(payload.text, deps=DEPS)
+    response = await rag_agent_file.agent.run(payload.text)
     if hasattr(response, "data"):
         return str(response.data)
     for attr in ("output", "output_text", "text"):
