@@ -118,7 +118,7 @@ async def search_knowledge_base(ctx: RunContext[None], query: str, limit: int = 
 # Create the PydanticAI agent with the RAG tool
 agent = Agent(
     'openai:gpt-4o-mini',
-    system_prompt="""You are an intelligent knowledge assistant with access to an organization's documentation and information.
+    system_prompt="""You are an intelligent knowledge assistant with access to some documentation and information.
 Your role is to help users find accurate information from the knowledge base.
 You have a professional yet friendly demeanor.
 

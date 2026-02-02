@@ -8,18 +8,16 @@ from typing import List, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
+from pathlib import Path
 from dotenv import load_dotenv
 import re
-from docling.chunking import HybridChunker
-from transformers import AutoTokenizer
-from docling.document_converter import DocumentConverter
 
 def _is_windows_selector_event_loop(loop: asyncio.AbstractEventLoop) -> bool:
     # On Windows, SelectorEventLoop doesn't support subprocesses; Playwright needs subprocess.
     return sys.platform.startswith("win") and "SelectorEventLoop" in loop.__class__.__name__
 
 
-async def _ingest_data_impl(url: str) -> str:
+async def _crawl_data_impl(url: str) -> str:
     urls = get_pydantic_ai_docs_urls(url)
     if not urls:
         print("No URLs found to crawl")
@@ -27,7 +25,7 @@ async def _ingest_data_impl(url: str) -> str:
 
     print(f"Found {len(urls)} URLs to crawl")
     await crawl_parallel(urls)
-    return "Data ingestion completed successfully"
+    return "Web Crawl completed successfully"
 
 
 def _run_coroutine_in_new_proactor_loop(coro: "asyncio.Future[str] | asyncio.coroutines.Coroutine[Any, Any, str]") -> str:
@@ -240,6 +238,9 @@ async def get_doc_name(chunks: str) -> Dict[str, str]:
         return {"title": "Error processing title", "summary": "Error processing summary"}
 
 async def process_and_store_document(url: str, markdown: str):
+    # from docling.chunking import HybridChunker
+    # from transformers import AutoTokenizer
+    # from docling.document_converter import DocumentConverter
     """Process a document and store its chunks in parallel."""
     # Split into chunks
     chunks = chunk_text(markdown)
@@ -269,6 +270,19 @@ async def process_and_store_document(url: str, markdown: str):
 
 async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
     """Crawl multiple URLs in parallel with a concurrency limit."""
+    documents_dir = Path(__file__).resolve().parent / "documents"
+    documents_dir.mkdir(parents=True, exist_ok=True)
+
+    # Continue numbering from the largest existing markdown-N.md (if any) to keep names predictable.
+    existing_max = 0
+    for p in documents_dir.glob("markdown-*.md"):
+        m = re.match(r"markdown-(\d+)\.md$", p.name)
+        if m:
+            existing_max = max(existing_max, int(m.group(1)))
+
+    next_index = existing_max + 1
+    index_lock = asyncio.Lock()
+
     browser_config = BrowserConfig(
         headless=True,
         verbose=False,
@@ -285,6 +299,7 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def process_url(url: str):
+            nonlocal next_index
             async with semaphore:
                 result = await crawler.arun(
                     url=url,
@@ -300,8 +315,13 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
                         if isinstance(markdown_obj, str)
                         else getattr(markdown_obj, "raw_markdown", str(markdown_obj))
                     )
-                    print(f"Markdown: {markdown_text}")
-                    await process_and_store_document(url, markdown_text)
+                    async with index_lock:
+                        file_index = next_index
+                        next_index += 1
+
+                    md_path = documents_dir / f"markdown-{file_index}.md"
+                    md_path.write_text(markdown_text, encoding="utf-8")
+                    print(f"Saved markdown to: {md_path}")
                 else:
                     print(f"Failed: {url} - Error: {result.error_message}")
         
@@ -353,7 +373,7 @@ def get_pydantic_ai_docs_urls(base_url: str):
         # Return the base URL if any error occurs
         return [base_url]
     
-async def ingest_data(url: str) -> str:
+async def crawl_data(url: str) -> str:
     """
     Ingest website docs into Supabase.
 
@@ -368,12 +388,12 @@ async def ingest_data(url: str) -> str:
                 print(
                     f"Detected {loop.__class__.__name__} on Windows; running ingestion in a Proactor event loop thread for Playwright compatibility."
                 )
-                return await asyncio.to_thread(_run_coroutine_in_new_proactor_loop, _ingest_data_impl(url))
+                return await asyncio.to_thread(_run_coroutine_in_new_proactor_loop, _crawl_data_impl(url))
         except RuntimeError:
             # No running loop; fall back to direct execution.
             pass
 
-    return await _ingest_data_impl(url)
+    return await _crawl_data_impl(url)
 
 # async def main():
 #     # Get URLs from Pydantic AI docs

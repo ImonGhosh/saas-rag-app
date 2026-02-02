@@ -387,7 +387,7 @@ class DocumentIngestionPipeline:
         """Extract title from document content or filename."""
         # Try to find markdown title
         lines = content.split('\n')
-        for line in lines[:10]:  # Check first 10 lines
+        for line in lines[:100]:  # Check first 100 lines
             line = line.strip()
             if line.startswith('# '):
                 return line[2:].strip()

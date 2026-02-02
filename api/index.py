@@ -113,8 +113,12 @@ async def idea(payload: IdeaRequest):
 @app.post("/ingest", response_class=PlainTextResponse)
 async def ingest(payload: IngestRequest):
     try:
-        result = await web_data_ingestion.ingest_data(payload.url)
-        return str(result)
+        await web_data_ingestion.crawl_data(payload.url)
+
+        # After crawl saves markdown into api/documents, run the file ingestion pipeline over those files.
+        await file_data_ingest.run_ingestion()
+
+        return "Sucessfully ingested website data"
     except Exception as err:
         return f"Error: {err}"
 
