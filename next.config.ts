@@ -9,6 +9,14 @@ const nextConfig: NextConfig = {
         source: "/api",
         destination: "http://127.0.0.1:8000/api",
       },
+      {
+        source: "/ingest",
+        destination: "http://127.0.0.1:8000/ingest",
+      },
+      {
+        source: "/ingest-file",
+        destination: "http://127.0.0.1:8000/ingest-file",
+      }
     ];
   },
 };
