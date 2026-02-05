@@ -20,12 +20,11 @@ def _is_windows_selector_event_loop(loop: asyncio.AbstractEventLoop) -> bool:
 async def _crawl_data_impl(url: str) -> str:
     urls = get_pydantic_ai_docs_urls(url)
     if not urls:
-        print("No URLs found to crawl")
-        return "Please enter a valid URL"
+        raise ValueError("No URLs found to crawl. Please enter a valid URL.")
 
     print(f"Found {len(urls)} URLs to crawl")
-    await crawl_parallel(urls)
-    return "Web Crawl completed successfully"
+    md_path = await crawl_parallel(urls)
+    return str(md_path)
 
 
 def _run_coroutine_in_new_proactor_loop(coro: "asyncio.Future[str] | asyncio.coroutines.Coroutine[Any, Any, str]") -> str:
@@ -268,20 +267,26 @@ async def process_and_store_document(url: str, markdown: str):
     ]
     await asyncio.gather(*insert_tasks)
 
-async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
-    """Crawl multiple URLs in parallel with a concurrency limit."""
+async def crawl_parallel(urls: List[str], max_concurrent: int = 5) -> Path:
+    """
+    Crawl multiple URLs in parallel with a concurrency limit.
+
+    Returns:
+        Path to the newly created markdown file containing the crawl output.
+    """
     documents_dir = Path(__file__).resolve().parent / "documents"
     documents_dir.mkdir(parents=True, exist_ok=True)
 
-    # Continue numbering from the largest existing markdown-N.md (if any) to keep names predictable.
+    # Create a single new markdown file per crawl run (predictable numbering).
     existing_max = 0
     for p in documents_dir.glob("markdown-*.md"):
         m = re.match(r"markdown-(\d+)\.md$", p.name)
         if m:
             existing_max = max(existing_max, int(m.group(1)))
 
-    next_index = existing_max + 1
-    index_lock = asyncio.Lock()
+    md_path = documents_dir / f"markdown-{existing_max + 1}.md"
+    write_lock = asyncio.Lock()
+    md_path.write_text("", encoding="utf-8")
 
     browser_config = BrowserConfig(
         headless=True,
@@ -299,7 +304,6 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
         semaphore = asyncio.Semaphore(max_concurrent)
         
         async def process_url(url: str):
-            nonlocal next_index
             async with semaphore:
                 result = await crawler.arun(
                     url=url,
@@ -315,13 +319,11 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
                         if isinstance(markdown_obj, str)
                         else getattr(markdown_obj, "raw_markdown", str(markdown_obj))
                     )
-                    async with index_lock:
-                        file_index = next_index
-                        next_index += 1
-
-                    md_path = documents_dir / f"markdown-{file_index}.md"
-                    md_path.write_text(markdown_text, encoding="utf-8")
-                    print(f"Saved markdown to: {md_path}")
+                    block = f"\n\n<!-- Source: {url} -->\n\n{markdown_text}\n"
+                    async with write_lock:
+                        with md_path.open("a", encoding="utf-8") as out:
+                            out.write(block)
+                    print(f"Appended markdown to: {md_path}")
                 else:
                     print(f"Failed: {url} - Error: {result.error_message}")
         
@@ -329,6 +331,8 @@ async def crawl_parallel(urls: List[str], max_concurrent: int = 5):
         await asyncio.gather(*[process_url(url) for url in urls])
     finally:
         await crawler.close()
+
+    return md_path
 
 def get_pydantic_ai_docs_urls(base_url: str):
     """

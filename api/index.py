@@ -54,7 +54,10 @@ async def _run_ingest_file_job(job_id: str) -> None:
 
     try:
         async with _INGEST_LOCK:
-            await file_data_ingest.run_ingestion()
+            document_path = job.get("document_path")
+            if not document_path:
+                raise ValueError("Missing document_path for ingestion job")
+            await file_data_ingest.run_ingestion(document_path=document_path)
         job["status"] = "succeeded"
     except Exception as err:
         job["status"] = "failed"
@@ -113,10 +116,10 @@ async def idea(payload: IdeaRequest):
 @app.post("/ingest", response_class=PlainTextResponse)
 async def ingest(payload: IngestRequest):
     try:
-        await web_data_ingestion.crawl_data(payload.url)
+        md_path = await web_data_ingestion.crawl_data(payload.url)
 
         # After crawl saves markdown into api/documents, run the file ingestion pipeline over those files.
-        await file_data_ingest.run_ingestion()
+        await file_data_ingest.run_ingestion(document_path=md_path)
 
         return "Sucessfully ingested website data"
     except Exception as err:
@@ -146,7 +149,7 @@ async def ingest_file(background_tasks: BackgroundTasks, file: UploadFile = File
         await file.close()
 
     job_id = uuid4().hex
-    _INGEST_JOBS[job_id] = {"status": "queued"}
+    _INGEST_JOBS[job_id] = {"status": "queued", "document_path": str(dest_path)}
     background_tasks.add_task(_run_ingest_file_job, job_id)
 
     return JSONResponse(status_code=202, content={"job_id": job_id})

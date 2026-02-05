@@ -67,6 +67,7 @@ class DocumentIngestionPipeline:
     def __init__(
         self,
         config: IngestionConfig,
+        documents_folder: str = "documents",
         clean_before_ingest: bool = True
     ):
         """
@@ -74,10 +75,11 @@ class DocumentIngestionPipeline:
 
         Args:
             config: Ingestion configuration
+            documents_folder: Folder containing markdown documents
             clean_before_ingest: Whether to clean existing data before ingestion (default: True)
         """
         self.config = config
-        self.documents_folder: str | None = None
+        self.documents_folder = _resolve_documents_folder(documents_folder)
         self.clean_before_ingest = clean_before_ingest
         
         # Initialize components
@@ -114,16 +116,12 @@ class DocumentIngestionPipeline:
     
     async def ingest_documents(
         self,
-        document_path: Optional[str] = None,
-        documents_folder: Optional[str] = None,
         progress_callback: Optional[callable] = None
     ) -> List[IngestionResult]:
         """
-        Ingest a single document (when `document_path` is provided) or all documents from a folder.
+        Ingest all documents from the documents folder.
         
         Args:
-            document_path: Path to a single document to ingest
-            documents_folder: Folder to scan for documents when `document_path` is not provided
             progress_callback: Optional callback for progress updates
         
         Returns:
@@ -132,18 +130,8 @@ class DocumentIngestionPipeline:
         if not self._initialized:
             await self.initialize()
         
-        if document_path is not None:
-            resolved_path = str(Path(document_path).expanduser().resolve())
-            file_candidate = Path(resolved_path)
-            if not file_candidate.exists() or not file_candidate.is_file():
-                raise FileNotFoundError(f"Document file not found: {resolved_path}")
-            self.documents_folder = str(file_candidate.parent)
-            document_files = [resolved_path]
-        else:
-            default_documents_dir = _project_root() / "api" / "documents"
-            folder = str(default_documents_dir) if documents_folder is None else str(documents_folder)
-            self.documents_folder = _resolve_documents_folder(folder)
-            document_files = self._find_document_files()
+        # Find all supported document files
+        document_files = self._find_document_files()
 
         if not document_files:
             logger.warning(f"No supported document files found in {self.documents_folder}")
@@ -202,8 +190,7 @@ class DocumentIngestionPipeline:
         # Read document (returns tuple: content, docling_doc)
         document_content, docling_doc = self._read_document(file_path)
         document_title = self._extract_title(document_content, file_path)
-        documents_folder = self.documents_folder or str(Path(file_path).resolve().parent)
-        document_source = os.path.relpath(file_path, documents_folder)
+        document_source = os.path.relpath(file_path, self.documents_folder)
 
         # Extract metadata from content
         document_metadata = self._extract_document_metadata(document_content, file_path)
@@ -270,9 +257,6 @@ class DocumentIngestionPipeline:
     
     def _find_document_files(self) -> List[str]:
         """Find all supported document files in the documents folder."""
-        if not self.documents_folder:
-            return []
-
         documents_dir = Path(self.documents_folder)
 
         if not documents_dir.exists():
@@ -314,16 +298,6 @@ class DocumentIngestionPipeline:
         audio_formats = ['.mp3', '.wav', '.m4a', '.flac']
         if file_ext in audio_formats:
             content = self._transcribe_audio(file_path)
-
-            # # Testing helper: persist transcription next to the source file
-            # try:
-            #     base_name = os.path.splitext(os.path.basename(file_path))[0]
-            #     output_path = os.path.join(os.path.dirname(file_path), f"{base_name}-converted.md")
-            #     with open(output_path, "w", encoding="utf-8") as f:
-            #         f.write(content)
-            #     logger.info(f"Saved transcribed markdown: {output_path}")
-            # except Exception as e:
-            #     logger.warning(f"Failed to save transcribed markdown for {file_path}: {e}")
             return (content, None)  # No DoclingDocument for audio
 
         # Docling-supported formats (convert to markdown)
@@ -340,16 +314,6 @@ class DocumentIngestionPipeline:
 
                 # Export to markdown for consistent processing
                 markdown_content = result.document.export_to_markdown()
-
-                # # Testing helper: persist converted markdown next to the source file
-                # try:
-                #     base_name = os.path.splitext(os.path.basename(file_path))[0]
-                #     output_path = os.path.join(os.path.dirname(file_path), f"{base_name}-converted.md")
-                #     with open(output_path, "w", encoding="utf-8") as f:
-                #         f.write(markdown_content)
-                #     logger.info(f"Saved converted markdown: {output_path}")
-                # except Exception as e:
-                #     logger.warning(f"Failed to save converted markdown for {file_path}: {e}")
                 logger.info(f"Successfully converted {os.path.basename(file_path)} to markdown")
 
                 # Return both markdown and DoclingDocument for HybridChunker
@@ -554,9 +518,8 @@ async def main():
 
 
 async def run_ingestion(
-    document_path: Optional[str] = None,
     documents: Optional[str] = None,
-    no_clean: bool = True,
+    no_clean: bool = False,
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
     no_semantic: bool = False,
@@ -570,12 +533,8 @@ async def run_ingestion(
     - cleans existing data by default (unless no_clean=True)
     - semantic chunking enabled by default (unless no_semantic=True)
     """
-    documents_dir: Optional[str]
-    if document_path is None:
-        default_documents_dir = _project_root() / "api" / "documents"
-        documents_dir = str(default_documents_dir) if documents is None else str(documents)
-    else:
-        documents_dir = None
+    default_documents_dir = _project_root() / "api" / "documents"
+    documents_dir = str(default_documents_dir) if documents is None else str(documents)
 
     # Configure logging
     log_level = logging.DEBUG if verbose else logging.INFO
@@ -601,6 +560,7 @@ async def run_ingestion(
     # Create and run pipeline - clean by default unless --no-clean is specified
     pipeline = DocumentIngestionPipeline(
         config=config,
+        documents_folder=documents_dir,
         clean_before_ingest=not no_clean  # Clean by default
     )
     
@@ -610,11 +570,7 @@ async def run_ingestion(
     try:
         start_time = datetime.now()
         
-        results = await pipeline.ingest_documents(
-            document_path=document_path,
-            documents_folder=documents_dir,
-            progress_callback=progress_callback,
-        )
+        results = await pipeline.ingest_documents(progress_callback)
         
         end_time = datetime.now()
         total_time = (end_time - start_time).total_seconds()

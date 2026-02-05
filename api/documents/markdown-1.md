@@ -1,3 +1,7 @@
+
+
+<!-- Source: https://www.meilisearch.com/blog/rag-types -->
+
 [Go to home![Meilisearch's logo](https://www.meilisearch.com/_next/static/media/logo.cd874c57.svg)](https://www.meilisearch.com/blog/</>)
   * Product
   * Solutions
@@ -371,5 +375,6 @@ Company
 
 
   * [](https://www.meilisearch.com/blog/<https:/discord.meilisearch.com/>)
+
 
 
