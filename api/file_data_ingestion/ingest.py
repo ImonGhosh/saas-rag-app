@@ -14,6 +14,7 @@ import argparse
 
 import asyncpg
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 from .chunker import ChunkingConfig, create_chunker, DocumentChunk
 from .embedder import create_embedder
@@ -32,6 +33,7 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,31 @@ def _resolve_documents_folder(documents_folder: str) -> str:
         return str(cwd_candidate)
 
     return str(_project_root() / folder_path)
+
+async def create_title(content: str) -> Dict[str, str]:
+    """Create a short document title """
+    system_prompt = """You are a helpful assistant. 
+    You can generate relevant a short title from a given document snippet. 
+    You always return only a JSON object with exactly a single key: 'title', whose value should be the generated document title.
+    The short title should always be a short word phrase summarizing the overall topic of the document.
+    """
+    
+    # Prepare the prompt from joining 4 chunks
+    prompt = content
+
+    try:
+        response = await openai_client.chat.completions.create(
+            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Based on the following text, generate a short meaningful title for it:\n\n{prompt}"}
+            ],
+            response_format={ "type": "json_object" }
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        print(f"Error creating title: {e}")
+        return {"title": "Error processing title", "summary": "Error processing summary"}
 
 
 class DocumentIngestionPipeline:
@@ -201,7 +228,7 @@ class DocumentIngestionPipeline:
 
         # Read document (returns tuple: content, docling_doc)
         document_content, docling_doc = self._read_document(file_path)
-        document_title = self._extract_title(document_content, file_path)
+        document_title = await self._extract_title(document_content, file_path)
         documents_folder = self.documents_folder or str(Path(file_path).resolve().parent)
         document_source = os.path.relpath(file_path, documents_folder)
 
@@ -324,7 +351,7 @@ class DocumentIngestionPipeline:
             #     logger.info(f"Saved transcribed markdown: {output_path}")
             # except Exception as e:
             #     logger.warning(f"Failed to save transcribed markdown for {file_path}: {e}")
-            return (content, None)  # No DoclingDocument for audio
+            # return (content, None)  # No DoclingDocument for audio
 
         # Docling-supported formats (convert to markdown)
         docling_formats = ['.pdf', '.docx', '.doc', '.pptx', '.ppt', '.xlsx', '.xls', '.html', '.htm']
@@ -341,15 +368,15 @@ class DocumentIngestionPipeline:
                 # Export to markdown for consistent processing
                 markdown_content = result.document.export_to_markdown()
 
-                # # Testing helper: persist converted markdown next to the source file
-                # try:
-                #     base_name = os.path.splitext(os.path.basename(file_path))[0]
-                #     output_path = os.path.join(os.path.dirname(file_path), f"{base_name}-converted.md")
-                #     with open(output_path, "w", encoding="utf-8") as f:
-                #         f.write(markdown_content)
-                #     logger.info(f"Saved converted markdown: {output_path}")
-                # except Exception as e:
-                #     logger.warning(f"Failed to save converted markdown for {file_path}: {e}")
+                # Testing helper: persist converted markdown next to the source file
+                try:
+                    base_name = os.path.splitext(os.path.basename(file_path))[0]
+                    output_path = os.path.join(os.path.dirname(file_path), f"{base_name}-converted.md")
+                    with open(output_path, "w", encoding="utf-8") as f:
+                        f.write(markdown_content)
+                    logger.info(f"Saved converted markdown: {output_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save converted markdown for {file_path}: {e}")
                 logger.info(f"Successfully converted {os.path.basename(file_path)} to markdown")
 
                 # Return both markdown and DoclingDocument for HybridChunker
@@ -419,16 +446,54 @@ class DocumentIngestionPipeline:
             logger.error(f"Failed to transcribe {file_path} with Whisper ASR: {e}")
             return f"[Error: Could not transcribe audio file {os.path.basename(file_path)}]"
 
-    def _extract_title(self, content: str, file_path: str) -> str:
-        """Extract title from document content or filename."""
-        # Try to find markdown title
-        lines = content.split('\n')
-        for line in lines[:100]:  # Check first 100 lines
-            line = line.strip()
-            if line.startswith('# '):
-                return line[2:].strip()
+    # def _extract_title(self, content: str, file_path: str) -> str:
+    #     """Extract title from document content or filename."""
+    #     # Try to find markdown title
+    #     lines = content.split('\n')
+    #     for line in lines[:100]:  # Check first 100 lines
+    #         line = line.strip()
+    #         if line.startswith('# '):
+    #             return line[2:].strip()
         
-        # Fallback to filename
+    #     # Fallback to filename
+    #     return os.path.splitext(os.path.basename(file_path))[0]
+    
+    async def _extract_title(self, content: str, file_path: str) -> str:
+        """Extract title from document content or filename.
+
+        Priority (within first 70 lines):
+        1) First '# ' heading
+        2) First '## ' heading
+        3) First '### ' heading
+        Fallback: filename without extension
+        """
+        lines = content.splitlines()[:70]
+
+        # 1) First '# '
+        for line in lines:
+            s = line.strip()
+            if s.startswith("# "):
+                return s[2:].strip()
+
+        # 2) First '## '
+        for line in lines:
+            s = line.strip()
+            if s.startswith("## "):
+                return s[3:].strip()
+
+        # 3) First '### '
+        for line in lines:
+            s = line.strip()
+            if s.startswith("### "):
+                return s[4:].strip()
+            
+        response = await create_title(content.splitlines()[:100])
+
+        title = (response or {}).get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+
+        # 4) Fallback to filename
         return os.path.splitext(os.path.basename(file_path))[0]
     
     def _extract_document_metadata(self, content: str, file_path: str) -> Dict[str, Any]:
@@ -624,6 +689,7 @@ async def run_ingestion(
         print("INGESTION SUMMARY")
         print("="*50)
         print(f"Documents processed: {len(results)}")
+        print(f"Document titles: {[r.title for r in results]}")
         print(f"Total chunks created: {sum(r.chunks_created for r in results)}")
         # Graph-related stats removed
         print(f"Total errors: {sum(len(r.errors) for r in results)}")
