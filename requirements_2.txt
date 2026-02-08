@@ -53,6 +53,7 @@ altair>=5.5,<6
 pydeck>=0.9,<1
 tqdm>=4.67,<5
 
+
 # =========================
 # Document AI / Speech (heavy deps)
 # =========================
@@ -65,9 +66,16 @@ openai-whisper>=20250625
 logfire>=3.14,<4
 opentelemetry-exporter-otlp
 
+
+hf_xet
+
 # =========================
 # Testing (dev-only; move to requirements-dev.txt if possible)
 # =========================
 # pytest>=8.3,<9
 # mockito>=1.5,<2
 # pytest-mockito>=0.0.4,<0.1
+
+# Additional commands to run
+# --- For docling vision model ----
+# python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
